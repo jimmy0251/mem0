@@ -26,6 +26,7 @@ class VectorStoreConfig(BaseModel):
         "weaviate": "WeaviateConfig",
         "faiss": "FAISSConfig",
         "langchain": "LangchainConfig",
+        "firestore": "FirestoreConfig",
     }
 
     @model_validator(mode="after")

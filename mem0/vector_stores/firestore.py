@@ -10,6 +10,7 @@ from firebase_admin import credentials, firestore
 from google.cloud.firestore_v1.base_vector_query import DistanceMeasure
 from google.cloud.firestore_v1.vector import Vector
 from google.cloud.firestore import Client, CollectionReference # Corrected imports
+from google.cloud.firestore_v1.base_query import FieldFilter # Import FieldFilter
 
 from mem0.vector_stores.base import VectorStoreBase
 
@@ -203,14 +204,14 @@ class FirestoreDB(VectorStoreBase):
                 # Or direct fields if they exist outside payload in your schema
                 if isinstance(value, dict):
                     if "gte" in value:
-                        current_query = current_query.where(key, ">=", value["gte"])
+                        current_query = current_query.where(filter=FieldFilter(key, ">=", value["gte"]))
                     if "lte" in value:
-                        current_query = current_query.where(key, "<=", value["lte"])
+                        current_query = current_query.where(filter=FieldFilter(key, "<=", value["lte"]))
                     if "eq" in value:
-                        current_query = current_query.where(key, "==", value["eq"])
+                        current_query = current_query.where(filter=FieldFilter(key, "==", value["eq"]))
                     # Firestore also supports array_contains, in, etc. which could be added here
                 else:
-                    current_query = current_query.where(key, "==", value)
+                    current_query = current_query.where(filter=FieldFilter(key, "==", value))
         
         vector_query = current_query.find_nearest(
             vector_field=self.vector_field_name,
@@ -222,10 +223,10 @@ class FirestoreDB(VectorStoreBase):
         try:
             # The `documents` property of VectorQuerySnapshot holds the DocumentSnapshot objects
             # Each DocumentSnapshot has a `distance` attribute when returned from find_nearest
-            vector_query_snapshot = vector_query.get()
+            document_snapshots = vector_query.get()
             
             results = []
-            for doc_snapshot in vector_query_snapshot.documents: # Iterate through DocumentSnapshot
+            for doc_snapshot in document_snapshots: # Iterate directly over the list of snapshots
                 doc_data = doc_snapshot.to_dict()
                 payload = doc_data.get("payload")
                 
@@ -401,13 +402,13 @@ class FirestoreDB(VectorStoreBase):
             for key, value in filters.items():
                 if isinstance(value, dict):
                     if "gte" in value:
-                        query_builder = query_builder.where(key, ">=", value["gte"])
+                        query_builder = query_builder.where(filter=FieldFilter(key, ">=", value["gte"]))
                     if "lte" in value:
-                        query_builder = query_builder.where(key, "<=", value["lte"])
+                        query_builder = query_builder.where(filter=FieldFilter(key, "<=", value["lte"]))
                     if "eq" in value:
-                         query_builder = query_builder.where(key, "==", value["eq"])
+                         query_builder = query_builder.where(filter=FieldFilter(key, "==", value["eq"]))
                 else:
-                    query_builder = query_builder.where(key, "==", value)
+                    query_builder = query_builder.where(filter=FieldFilter(key, "==", value))
 
         if limit:
             query_builder = query_builder.limit(limit)

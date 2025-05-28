@@ -8,7 +8,7 @@ from pydantic import BaseModel
 try:
     import firebase_admin
     from firebase_admin import credentials, firestore
-    from firebase_admin.firestore import Client, CollectionReference, DocumentSnapshot, DistanceMeasure, Vector # Corrected imports
+    from firebase_admin.firestore import Client, CollectionReference, DistanceMeasure, Vector # Corrected imports
 except ImportError:
     raise ImportError(
         "Firestore requires extra dependencies. Install with `pip install firebase-admin`"

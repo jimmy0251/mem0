@@ -8,7 +8,8 @@ from pydantic import BaseModel
 try:
     import firebase_admin
     from firebase_admin import credentials, firestore
-    from google.cloud.firestore_v1.base_vector_query import DistanceMeasure, Vector
+    from google.cloud.firestore_v1.base_vector_query import DistanceMeasure
+    from google.cloud.firestore_v1.vector import Vector
     from google.cloud.firestore import Client, CollectionReference # Corrected imports
 except ImportError:
     raise ImportError(

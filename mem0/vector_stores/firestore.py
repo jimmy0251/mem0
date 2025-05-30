@@ -5,12 +5,17 @@ from typing import Any, Dict, List, Optional, Union
 # import numpy as np # No longer needed for client-side calculations
 from pydantic import BaseModel
 
-import firebase_admin
-from firebase_admin import credentials, firestore
-from google.cloud.firestore_v1.base_vector_query import DistanceMeasure
-from google.cloud.firestore_v1.vector import Vector
-from google.cloud.firestore import Client, CollectionReference # Corrected imports
-from google.cloud.firestore_v1.base_query import FieldFilter # Import FieldFilter
+try:
+    import firebase_admin
+    from firebase_admin import credentials, firestore
+    from google.cloud.firestore_v1.base_vector_query import DistanceMeasure
+    from google.cloud.firestore_v1.vector import Vector
+    from google.cloud.firestore import Client, CollectionReference # Corrected imports
+    from google.cloud.firestore_v1.base_query import FieldFilter # Import FieldFilter
+except ImportError:
+    raise ImportError(
+        "Firestore requires extra dependencies. Install with `pip install firebase-admin`"
+    ) from None
 
 from mem0.vector_stores.base import VectorStoreBase
 
@@ -107,7 +112,7 @@ class FirestoreDB(VectorStoreBase):
             self.distance_metric = metric_lower
         
         logger.info(f"FirestoreDB configured. Collection: {self.collection_name}, Vector Field: {self.vector_field_name}, Vector Size: {self.vector_size}, Distance: {self.distance_metric}")
-        logger.warning(f"Ensure a vector index is properly configured in Firestore for field '{self.vector_field_name}' in collection '{self.collection_name}' with appropriate dimension and distance measure.")
+        logger.info(f"Ensure a vector index is properly configured in Firestore for field '{self.vector_field_name}' in collection '{self.collection_name}' with appropriate dimension and distance measure.")
         # No actual creation step for collection itself in Firestore client SDK.
         # Index creation is done via Firebase Console, gcloud CLI, or Terraform.
         pass
@@ -125,7 +130,7 @@ class FirestoreDB(VectorStoreBase):
             payloads (list, optional): List of payloads corresponding to vectors. Defaults to an empty dict for each vector.
             ids (list, optional): List of IDs corresponding to vectors. If None, Firestore will auto-generate IDs.
         """
-        logger.info(f"Inserting {len(vectors)} vectors into collection {self.collection_name}")
+        logger.info(f"Inserting {len(vectors)} vectors into collection {self.collection_name}, payloads: {payloads}, ids: {ids}")
         batch = self.db.batch()
         count_in_batch = 0
 
@@ -134,7 +139,7 @@ class FirestoreDB(VectorStoreBase):
             doc_id = str(ids[i]) if ids and i < len(ids) else None
 
             doc_data = {
-                "vector": vector,
+                self.vector_field_name: Vector(vector),
                 "payload": payload,
                 # Potentially add created_at/updated_at timestamps
                 "created_at": firestore.SERVER_TIMESTAMP
@@ -204,37 +209,36 @@ class FirestoreDB(VectorStoreBase):
                 # Or direct fields if they exist outside payload in your schema
                 if isinstance(value, dict):
                     if "gte" in value:
-                        current_query = current_query.where(filter=FieldFilter(key, ">=", value["gte"]))
+                        current_query = current_query.where(filter=FieldFilter("payload." + key, ">=", value["gte"]))
                     if "lte" in value:
-                        current_query = current_query.where(filter=FieldFilter(key, "<=", value["lte"]))
+                        current_query = current_query.where(filter=FieldFilter("payload." + key, "<=", value["lte"]))
                     if "eq" in value:
-                        current_query = current_query.where(filter=FieldFilter(key, "==", value["eq"]))
-                    # Firestore also supports array_contains, in, etc. which could be added here
+                        current_query = current_query.where(filter=FieldFilter("payload." + key, "==", value["eq"]))
                 else:
-                    current_query = current_query.where(filter=FieldFilter(key, "==", value))
-        
+                    current_query = current_query.where(filter=FieldFilter("payload." + key, "==", value))
+
+
         vector_query = current_query.find_nearest(
             vector_field=self.vector_field_name,
             query_vector=query_vector,
             limit=limit,
-            distance_measure=firestore_distance_measure
+            distance_measure=firestore_distance_measure,
+            distance_result_field="vector_distance",
         )
 
         try:
             # The `documents` property of VectorQuerySnapshot holds the DocumentSnapshot objects
             # Each DocumentSnapshot has a `distance` attribute when returned from find_nearest
-            document_snapshots = vector_query.get()
+            docs = vector_query.get()
+
             
             results = []
-            for doc_snapshot in document_snapshots: # Iterate directly over the list of snapshots
+            for doc_snapshot in docs: # Iterate directly over the list of snapshots
                 doc_data = doc_snapshot.to_dict()
+
                 payload = doc_data.get("payload")
-                
-                # The distance is directly available on the DocumentSnapshot
-                # For COSINE and DOT_PRODUCT, higher is better. For EUCLIDEAN, lower is better.
-                # The `distance` attribute from Firestore find_nearest provides the raw distance.
-                # We need to ensure our `score` in OutputData consistently means "higher is better".
-                raw_distance = doc_snapshot.distance
+                raw_distance = doc_data.get("vector_distance")
+
                 score = 0.0
                 if firestore_distance_measure == DistanceMeasure.EUCLIDEAN:
                     # Invert Euclidean so higher is better (e.g., 1 / (1 + dist) or -dist)
@@ -249,14 +253,6 @@ class FirestoreDB(VectorStoreBase):
 
                 results.append(OutputData(id=doc_snapshot.id, score=score, payload=payload))
             
-            # Firestore find_nearest already returns sorted results by distance.
-            # If we modified scores (e.g. for Euclidean), we might need to re-sort if the original order isn't preserved as desired.
-            # However, since we want "higher score = better", and find_nearest sorts by its metric:
-            # - Euclidean: sorts ascending (smaller distance is better). Our negated score also means sort descending for "better".
-            # - Cosine: sorts descending (larger similarity is better). Our score matches.
-            # - Dot Product: sorts descending (larger product is better). Our score matches.
-            # So, the order from Firestore should be fine if we use these scores.
-
             return results
         except Exception as e:
             logger.error(f"Error during Firestore find_nearest query: {e}")
@@ -283,12 +279,12 @@ class FirestoreDB(VectorStoreBase):
             vector (list, optional): Updated vector. Defaults to None.
             payload (dict, optional): Updated payload. Defaults to None.
         """
-        logger.info(f"Updating vector ID '{vector_id}' in collection {self.collection_name}")
+        logger.info(f"Updating vector ID '{vector_id}' in collection {self.collection_name}, payload: {payload}")
         doc_ref = self.collection_ref.document(str(vector_id))
 
         update_data = {}
         if vector is not None:
-            update_data["vector"] = vector
+            update_data[self.vector_field_name] = Vector(vector)
         if payload is not None:
             update_data["payload"] = payload
         
@@ -326,7 +322,6 @@ class FirestoreDB(VectorStoreBase):
                     id=doc.id,
                     score=0.0, # Score is not relevant for a direct get
                     payload=data.get("payload")
-                    # We don't return the vector itself here as per OutputData and Pinecone's get
                 )
             else:
                 logger.warning(f"Vector with ID '{vector_id}' not found.")
@@ -342,10 +337,7 @@ class FirestoreDB(VectorStoreBase):
         Returning the current collection name as a list for basic compatibility.
         """
         logger.warning("Firestore client SDK cannot list all collections. Returning current collection name.")
-        # This is a limitation. In a real scenario, you might have a known list of collections
-        # or use the Admin SDK on a backend to get a true list.
-        return [self.collection_name] # Or an object that mimics Pinecone's response if necessary
-
+        return [self.collection_name]
     def delete_col(self):
         """Delete a collection (all documents within it).
         This is a potentially destructive and slow operation.
@@ -353,7 +345,6 @@ class FirestoreDB(VectorStoreBase):
         logger.warning(f"Deleting all documents from collection '{self.collection_name}'. This can take a while.")
         
         # Firestore requires deleting documents in batches.
-        # Based on https://firebase.google.com/docs/firestore/manage-data/delete-data#collections
         def delete_collection_batch(coll_ref, batch_size):
             docs = coll_ref.limit(batch_size).stream()
             deleted = 0
@@ -402,13 +393,13 @@ class FirestoreDB(VectorStoreBase):
             for key, value in filters.items():
                 if isinstance(value, dict):
                     if "gte" in value:
-                        query_builder = query_builder.where(filter=FieldFilter(key, ">=", value["gte"]))
+                        query_builder = query_builder.where(filter=FieldFilter("payload." + key, ">=", value["gte"]))
                     if "lte" in value:
-                        query_builder = query_builder.where(filter=FieldFilter(key, "<=", value["lte"]))
+                        query_builder = query_builder.where(filter=FieldFilter("payload." + key, "<=", value["lte"]))
                     if "eq" in value:
-                         query_builder = query_builder.where(filter=FieldFilter(key, "==", value["eq"]))
+                         query_builder = query_builder.where(filter=FieldFilter("payload." + key, "==", value["eq"]))
                 else:
-                    query_builder = query_builder.where(filter=FieldFilter(key, "==", value))
+                    query_builder = query_builder.where(filter=FieldFilter("payload." + key, "==", value))
 
         if limit:
             query_builder = query_builder.limit(limit)

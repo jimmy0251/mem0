@@ -350,7 +350,7 @@ class PineconeDB(VectorStoreBase):
             response = self.index.query(**query_params)
             response = response.to_dict()
             results = self._parse_output(response["matches"])
-            return [results]
+            return (results,)
         except Exception as e:
             logger.error(f"Error listing vectors: {e}")
             return {"points": [], "next_page_token": None}

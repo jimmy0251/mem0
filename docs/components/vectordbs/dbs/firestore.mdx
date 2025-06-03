@@ -1,0 +1,131 @@
+---
+title: Firestore
+---
+
+import { Callout } from "nextra/components";
+
+## Firestore Vector Store
+
+[Google Cloud Firestore](https://firebase.google.com/docs/firestore) can be used as a vector store with `mem0` by leveraging its native vector search capabilities (using the `find_nearest` method). Firestore is a NoSQL document database that scales with your application and offers rich querying.
+
+<Callout type="info">
+    **Note**: Before using Firestore as a vector store with `mem0`:
+    1.  You need to have a Google Cloud Project with Firestore enabled.
+    2.  You must **manually create vector indexes** in Firestore for the collections and vector fields you intend to use. This is typically done via the Google Cloud Console, `gcloud` CLI, or Infrastructure as Code tools (e.g., Terraform). Refer to the [official Firestore vector search documentation](https://firebase.google.com/docs/firestore/vector-search#create_and_manage_vector_indexes) for details on index creation. The dimension of this index must match your embedding model.
+    3.  Ensure your Firebase Admin SDK is initialized. `mem0` will attempt to initialize it using a service account key JSON file path or by relying on `GOOGLE_APPLICATION_CREDENTIALS` environment variable.
+</Callout>
+
+### Usage
+
+To use Firestore, configure it in your `Memory` setup:
+
+```python
+import os
+from mem0 import Memory
+
+# Ensure GOOGLE_APPLICATION_CREDENTIALS environment variable is set,
+# or provide the path to your service account key JSON file in the config.
+# Example: os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = "/path/to/your/service-account-key.json"
+
+# Example configuration for Firestore
+embedding_dimensions = 1536 # e.g., for OpenAI text-embedding-3-small
+
+config = {
+    "vector_store": {
+        "provider": "firestore",
+        "config": {
+            "collection_name": "my_memory_vectors",
+            "vector_field_name": "embedding_field", # The field in your documents storing the vector
+            "metric": "cosine", # Or "euclidean", "dotproduct"
+            "embedding_model_dims": embedding_dimensions, # Crucial for FirestoreDB internal setup
+            # "service_account_key_path": "/path/to/your/service-account-key.json", # Optional
+            # "batch_size": 100 # Optional
+        }
+    },
+    "embedder": {
+        "provider": "openai", # Or your chosen embedder
+        "config": {
+            # Embedder-specific config, e.g., for OpenAI:
+            # "model": "text-embedding-3-small",
+            # "embedding_dims": embedding_dimensions # Ensure this matches the Firestore index & config
+        }
+    }
+    # ... other mem0 configurations ...
+}
+
+# Initialize Memory with the Firestore configuration
+# If embedding_model_dims is provided in FirestoreConfig, FirestoreDB.__init__ will call create_col.
+m = Memory.from_config(config)
+
+# If embedding_model_dims was NOT provided in FirestoreConfig, 
+# you would need to call create_col manually here:
+# m.vector_store.create_col(
+#     name=m.vector_store.collection_name, 
+#     vector_size=embedding_dimensions, 
+#     distance=m.vector_store.metric
+# )
+
+# Now you can add and search memories
+messages = [
+    {"role": "user", "content": "I love to explore ancient ruins."},
+    {"role": "assistant", "content": "That's fascinating! There are many historical sites to visit."}
+]
+m.add(messages, user_id="explorer_dora")
+
+results = m.search(query="Where can I find old civilizations?", user_id="explorer_dora")
+for res in results:
+    print(f"ID: {res.id}, Score: {res.score:.4f}, Payload: {res.payload}")
+
+```
+
+<Callout type="warning">
+    **Embedding Dimensions**: The `FirestoreDB` needs to know the `vector_size` (embedding dimensions) that your Firestore vector index is configured for. 
+    - If `embedding_model_dims` is provided in `FirestoreConfig`, `FirestoreDB` will call its `create_col` method during initialization. This sets up the instance with the necessary dimension and distance metric.
+    - If `embedding_model_dims` is *not* provided in the config, you **must** call `m.vector_store.create_col(name=..., vector_size=..., distance=...)` manually after `Memory` initialization and before performing operations like search. 
+    Always ensure the `vector_size` matches your externally created Firestore index and your embedding model's output dimensions.
+</Callout>
+
+
+### Config Parameters
+
+Here are the parameters available for configuring Firestore via `FirestoreConfig`:
+
+| Parameter                  | Description                                                                                                | Default Value       |
+|----------------------------|------------------------------------------------------------------------------------------------------------|---------------------|
+| `collection_name`          | Name of the Firestore collection where vectors will be stored.                                             | `"mem0_vectors"`    |
+| `embedding_model_dims`     | Optional. Dimensions of the embedding model. If provided, `FirestoreDB` initializes its internal state (via `create_col`) for these dimensions. Must match your Firestore index. | `None`              |
+| `service_account_key_path` | Optional. Path to your Firebase service account key JSON file. If `None`, uses `GOOGLE_APPLICATION_CREDENTIALS`. | `None`              |
+| `vector_field_name`        | Name of the field within your Firestore documents that stores the vector embeddings.                     | `"vector"`          |
+| `metric`                   | Distance metric for vector similarity. Supported: `"cosine"`, `"euclidean"`, `"dotproduct"`.               | `"cosine"`          |
+| `batch_size`               | Batch size for write operations (e.g., `insert`, `delete_col`). Min 1.                                   | `100`               |
+
+
+### Example `FirestoreConfig` (Python Dictionary)
+
+This shows how you might define the `config` part for the `firestore` provider in your overall `mem0` configuration dictionary:
+
+```python
+firestore_specific_config = {
+    "collection_name": "my_app_vectors",
+    "embedding_model_dims": 1536, # Match your embedder and Firestore index
+    "service_account_key_path": "/path/to/your/service_account.json", # Or None to use env var
+    "vector_field_name": "text_embedding",
+    "metric": "euclidean",
+    "batch_size": 50
+}
+
+# This would be part of a larger configuration object:
+# main_config = {
+#     "vector_store": {
+#         "provider": "firestore",
+#         "config": firestore_specific_config
+#     },
+#     "embedder": {
+#         "provider": "openai",
+#         "config": { "model": "text-embedding-3-small", "embedding_dims": 1536 }
+#     }
+#     # ... other configs ...
+# }
+```
+
+Remember to create the necessary vector indexes in Firestore with the correct dimensions and distance metric corresponding to your `vector_field_name` and chosen `metric`. 
